@@ -1,0 +1,452 @@
+CREATE OR REPLACE PROCEDURE mktg_exec.sp_adver_disp(src_id_input character varying(256), mktplace_nm_input character varying(256), mktplace_subchnl_nm_input character varying(500), mktplace_location character varying(100))
+ LANGUAGE plpgsql
+AS $_$
+
+/*
+============================================================================================================================================
+
+Authors          : Anandu Krishnan
+Create Date      : 10/20/2023
+Description      : This SP loads data for dispaly campaigns across marketplaces using below tables
+						stage.amazon_user_ad_spend_actl_in_ads_disp
+						stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_disp
+						sales_prfmnc_eval.sales_rptg_mktplace_actl_sale
+					to mktg_exec.cmpgn_track_mgmt_adver_disp
+Name             : mktg_exec.sp_adver_disp
+Revisions        :
+Input Parameter  : None
+Output Parameter : None
+Version     Date        Author           Description
+---------  ----------  ---------------  ------------------------------------------------------------------
+
+1.0        10/20/2023  Anandu            Initial Version.
+2.0        11/30/2023  Anandu            Changes based on Design Review.
+3.0        12/10/2023  Anandu            Incorporated logic for search campaign splitting
+
+===================================================================================================================
+*/
+--declaration
+
+declare
+ rows_affected INT;
+ split_srcid ALIAS for $1;
+ split_mktplace ALIAS FOR $2;
+ split_mktplace_subchnl ALIAS FOR $3;
+ split_mktplace_location ALIAS for $4;
+ loop_var_mktplace int;
+ loop_var_mktplace_subchnl int;
+ loop_var_mktplace_location int;
+ loop_var_srcid int;
+
+begin
+	if mktplace_nm_input is null or mktplace_subchnl_nm_input is null or mktplace_location is null or src_id_input is null then 
+		RAISE EXCEPTION 'No input variable passed. Expecting marketplace name as input seperated by comma and the subchannels as input as second variable seperated by comma'; 
+	end if;
+
+	--Checking if the temporary table exists or not
+	drop table if exists srcid_list;
+    --Create temporary table with marketplace values
+	create temporary table srcid_list(
+	   srcid_val VARCHAR(500)
+	);
+	--Split based on commas and enter as different records to do a in statement on main query
+    FOR loop_var_srcid IN 1..(REGEXP_COUNT(split_srcid,',') + 1) LOOP
+            INSERT INTO srcid_list VALUES (CAST(TRIM(SPLIT_PART(split_srcid,',',loop_var_srcid)) AS VARCHAR));
+    END LOOP;
+	
+	--Checking if the temporary table exists or not
+	drop table if exists mktplace_list;
+    --Create temporary table with marketplace values
+	create temporary table mktplace_list(
+	   mktplace_nm_val VARCHAR(500)
+	);
+	--Split based on commas and enter as different records to do a in statement on main query
+    FOR loop_var_mktplace IN 1..(REGEXP_COUNT(split_mktplace,',') + 1) LOOP
+            INSERT INTO mktplace_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace,',',loop_var_mktplace)) AS VARCHAR));
+    END LOOP;
+   
+   --Checking if the temporary table exists or not
+	drop table if exists mktplace_location_list;
+    --Create temporary table with marketplace values
+	create temporary table mktplace_location_list(
+	   mktplace_location_val VARCHAR(500)
+	);
+    --Split based on commas and enter as different records to do a in statement on main query
+    FOR loop_var_mktplace_location IN 1..(REGEXP_COUNT(split_mktplace_location,',') + 1) LOOP
+            INSERT INTO mktplace_location_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace_location,',',loop_var_mktplace_location)) AS VARCHAR));
+    END LOOP;
+   
+   
+   --Checking if the temporary table exists or not
+	drop table if exists mktplace_subchnl_list;
+    --Create temporary table with marketplace values
+	create temporary table mktplace_subchnl_list(
+	   mktplace_subchnl_nm_val VARCHAR(500)
+	);
+    --Split based on commas and enter as different records to do a in statement on main query
+    FOR loop_var_mktplace_subchnl IN 1..(REGEXP_COUNT(split_mktplace_subchnl,',') + 1) LOOP
+            INSERT INTO mktplace_subchnl_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace_subchnl,',',loop_var_mktplace_subchnl)) AS VARCHAR));
+    END LOOP;
+
+IF(NOT EXISTS(SELECT 1 FROM stage.amazon_user_ad_spend_actl_in_ads_disp) OR NOT EXISTS(SELECT 1 FROM stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_disp)
+	or not exists(SELECT 1 FROM sales_prfmnc_eval.sales_rptg_mktplace_actl_sale where mktplace_nm in (select distinct mktplace_nm_val from mktplace_list) and mktplace_subchnl_nm in (select distinct mktplace_subchnl_nm_val from mktplace_subchnl_list) and mktplace_loc_nm in (select distinct mktplace_location_val from mktplace_location_list))) THEN 
+	RAISE exception 'One of the table required in process is empty';
+ELSIF NOT EXISTS(select 1 from matrl_mstr.matrl where src_id in (select distinct srcid_val from srcid_list) and pack_size_nm is not null) THEN
+    RAISE exception ' matrl_mstr.matrl is empty for required conditions';
+ELSE 
+INSERT INTO klg_nga_kamea.mktg_exec.cmpgn_track_mgmt_adver_disp (
+      src_id,
+      src_nm,
+      hash_key,
+      mktplace_nm,
+      mktplace_cmpgn_nm,
+      disp_clasfctn_type_cd,
+      brand_srch_cnt,
+      bud_alloc_imprsn_val,
+      rpt_cal_dt,
+      cmpgn_bud_val,
+      click_thru_cnt,
+      imprsn_cnt,
+      mktplace_subbrand_desc,
+      total_add_to_cart_cnt,
+      total_cost_val,
+      total_detl_page_view_cnt,
+      total_new_to_brand_prod_sale_val,
+      total_new_to_brand_pur_val,
+      total_new_to_brand_sale_qty,
+      total_pur_click_cnt,
+      total_pur_cnt,
+      total_sale_val,
+      total_promo_sale_qty,
+	  curr_cd,
+	  kortex_upld_ts,
+	  kortex_dprct_ts,
+	  kortex_model_cre_ts
+      ) (
+      SELECT /*+ parallel(8)*/
+      src_id,
+      src_nm,
+      hash_key,
+      mktplace_nm,
+      mktplace_cmpgn_nm,
+      disp_clasfctn_type_cd,
+      brand_srch_cnt,
+      bud_alloc_imprsn_val,
+      rpt_cal_dt,
+      cmpgn_bud_val,
+      click_thru_cnt,
+      imprsn_cnt,
+      mktplace_subbrand_desc,
+      total_add_to_cart_cnt,
+      total_cost_val,
+      total_detl_page_view_cnt,
+      total_new_to_brand_prod_sale_val,
+      total_new_to_brand_pur_val,
+      total_new_to_brand_sale_qty,
+      total_pur_click_cnt,
+      total_pur_cnt,
+      total_sale_val,
+      total_promo_sale_qty,
+	  curr_cd,
+	  kortex_upld_ts,
+	  kortex_dprct_ts,
+	  kortex_model_cre_ts
+	   FROM (    
+		with offtake_sal as (
+select dt,
+       catg,
+       sales_val as oftake_sales
+       from (
+select offt.dt, 
+       prod_tab.altn_brand_nm as catg,
+       sum(sales_val) as sales_val
+  from
+        (SELECT rpt_cal_dt as dt,
+               mktplace_prod_cd,
+               pack_size_cd,
+               sum(coalesce(sale_val,0)) as sales_val,    
+               sum(coalesce(sale_qty,0)) as sales_unit,
+               sum(coalesce(rtn_qty,0)) as rtn_qty,
+           max(mktplace_prod_desc) as mktplace_prod_desc
+          from klg_nga_kamea.sales_prfmnc_eval.sales_rptg_mktplace_actl_sale
+         where src_id in (select distinct srcid_val from srcid_list)
+               AND mktplace_nm in (select distinct mktplace_nm_val from mktplace_list) 
+               and mktplace_subchnl_nm in (select distinct mktplace_subchnl_nm_val from mktplace_subchnl_list)
+               and mktplace_loc_nm in (select distinct mktplace_location_val from mktplace_location_list)
+         group by mktplace_prod_cd,rpt_cal_dt,pack_size_cd ) offt
+   left join (select pack_size_nm,altn_brand_nm 
+               from matrl_mstr.matrl
+               where src_id in (select distinct srcid_val from srcid_list)
+              group by pack_size_nm,altn_brand_nm
+             ) prod_tab
+    on offt.pack_size_cd = prod_tab.pack_size_nm
+    group by offt.dt,prod_tab.altn_brand_nm)
+),
+display_raw as
+(
+select 
+	cast(dt as date) as dt,
+	Replace("order", ' - ' || regexp_substr("order",'[0-9]{1,2}[A-Za-z]{3}[0-9]{1,2}',1,1)
+	|| ' - ' || regexp_substr("order",'[0-9]{1,2}[A-Za-z]{3}[0-9]{1,2}',1,2) || ' -', '') as cmpgn_nm,
+	sum(coalesce(nullif(bud, ''), '0') :: float) as bud,
+	sum(coalesce(nullif(bud_imprsn, ''), '0') :: float) as bud_imprsn,
+	sum(coalesce(nullif(total_cost, ''), '0') :: float) as total_cost,
+	sum(coalesce(nullif(imprsn, ''), '0') :: int ) as imprsn,
+	sum(coalesce(nullif(click_thru, ''), '0') :: int) as click_thru,
+	sum(coalesce(nullif(brand_srch, ''), '0') :: float) as brand_srch,
+	sum(coalesce(nullif(promo_dpv, ''), '0') :: int) as promo_dpv,
+	sum(coalesce(nullif(promo_atc, ''), '0') :: int) as promo_atc,
+	sum(coalesce(nullif(promo_atl, ''), '0') :: int) as promo_atl,
+	sum(coalesce(nullif(promo_unit_sold, ''), '0') :: int) as promo_unit_sold,
+	sum(coalesce(nullif(promo_pur, ''), '0') :: int) as promo_pur,
+	sum(coalesce(nullif(promo_sales, ''), '0') :: float) as promo_sales,
+	sum(coalesce(nullif(promo_ntb_prod_sales, ''), '0') :: float) as promo_ntb_prod_sales,
+	sum(coalesce(nullif(promo_ntb_pur, ''), '0') :: int) as promo_ntb_pur,
+	sum(coalesce(nullif(promo_ntb_unit_sold, ''), '0') :: int) as promo_ntb_unit_sold,
+	sum(coalesce(nullif(promo_pur_click, ''), '0') :: int) as promo_pur_click,
+	sum(coalesce(nullif(promo_snss, ''), '0') :: float) as promo_snss,
+	max(src_nm) as src_nm,
+	max(kortex_dprct_ts) as kortex_dprct_ts,
+	max(kortex_upld_ts) as kortex_upld_ts
+	from klg_nga_kamea.stage.amazon_user_ad_spend_actl_in_ads_disp
+	group by dt,cmpgn_nm 
+),
+disp_mapping as
+(
+select disp.*,
+	case 
+		when mp.catg_nm is null or mp.catg_nm = '' then 'UNCLASSIFIED'
+			else mp.catg_nm
+		end as catg
+		from display_raw disp
+		left join stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_disp mp 
+		on upper(disp.cmpgn_nm) = upper(mp.cmpgn_nm) 
+),
+correct_catg as 
+(
+select *
+	from disp_mapping
+	where catg in (select distinct upper(catg) from offtake_sal)
+),
+incorrect_catg as 
+(
+select *
+	from ( select * from disp_mapping where catg != 'UNCLASSIFIED')
+	where catg not in (select distinct upper(catg) from offtake_sal where catg is not null)
+),
+unclassified_catg as 
+(
+select * 
+	from disp_mapping
+	where catg = 'UNCLASSIFIED'
+),
+cnt_records as
+(
+select 
+  row_number() over (order by true) as num
+from stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_disp 
+),
+xplode_catg as
+(
+select
+  cmpgn_nm, 
+  catg_nm as catg, 
+  trim(split_part(catg_nm,'|',num::int)) as split_catg
+from
+  stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_disp
+cross join
+  cnt_records
+where
+   split_part(catg_nm,'|',num::int) is not null
+  and split_part(catg_nm,'|',num::int) != ''
+),
+disp_fix as
+(
+select 
+    catg_fix.catg as catg_mapping,
+    trim(catg_fix.split_catg) as split_catg,
+    incrt_catg.*
+from incorrect_catg incrt_catg
+	left join xplode_catg catg_fix
+	on trim(upper(incrt_catg.cmpgn_nm)) = trim(upper(catg_fix.cmpgn_nm))
+),
+incorrect_offtkae_cmb as 
+(
+	select 
+		*,
+		oftake_sales/sum(oftake_sales) over(partition by dt, cmpgn_nm) as catg_sales_perc
+		from
+		(
+		select 
+			inc.*,
+			offt.oftake_sales
+			from disp_fix inc 
+			left join offtake_sal offt
+			on inc.dt = offt.dt
+			and trim(upper(inc.split_catg)) = trim(upper(offt.catg))
+		)
+),
+incorrect_fix as
+(
+select 
+	dt,
+	cmpgn_nm,
+	(bud*catg_sales_perc) as bud,
+	(bud_imprsn*catg_sales_perc) as bud_imprsn,
+	(total_cost*catg_sales_perc) as total_cost,
+	(imprsn*catg_sales_perc) as imprsn,
+	(click_thru*catg_sales_perc) as click_thru,
+	(brand_srch*catg_sales_perc) as brand_srch,
+	(promo_dpv*catg_sales_perc) as promo_dpv,
+	(promo_atc*catg_sales_perc) as promo_atc,
+	(promo_atl*catg_sales_perc) as promo_atl,
+	(promo_unit_sold*catg_sales_perc) as promo_unit_sold,
+	(promo_pur*catg_sales_perc) as promo_pur,
+	(promo_sales*catg_sales_perc) as promo_sales,
+	(promo_ntb_prod_sales*catg_sales_perc) as promo_ntb_prod_sales,
+	(promo_ntb_pur*catg_sales_perc) as promo_ntb_pur,
+	(promo_ntb_unit_sold*catg_sales_perc) as promo_ntb_unit_sold,
+	(promo_pur_click*catg_sales_perc) as promo_pur_click,
+	(promo_snss*catg_sales_perc) as promo_snss,
+	src_nm,
+	kortex_dprct_ts,
+	kortex_upld_ts,
+	split_catg as catg
+	from incorrect_offtkae_cmb
+),
+display_cmb as
+(
+	select * from correct_catg
+	union all
+	select * from incorrect_fix
+	union all
+	select * from unclassified_catg	
+),
+display_type as 
+(
+select 
+	dt,
+	max(cmpgn_nm) as cmpgn_nm,
+	catg,
+	disp_type,
+	sum(bud)as bud,
+	sum(bud_imprsn) as bud_imprsn,
+	sum(total_cost) as total_cost,
+	sum(imprsn) as imprsn,
+	sum(click_thru) as click_thru,
+	sum(brand_srch) as brand_srch,
+	sum(promo_dpv) as promo_dpv,
+	sum(promo_atc) as prmo_atc,
+	sum(promo_unit_sold) as promo_unit_sold,
+	sum(promo_pur) as promo_pur,
+	sum(promo_sales) as promo_sales,
+	sum(promo_ntb_prod_sales) as promo_ntb_prod_sales,
+	sum(promo_ntb_pur) as promo_ntb_pur,
+	sum(promo_ntb_unit_sold) as promo_ntb_unit_sold,
+	sum(promo_pur_click) as promo_pur_click,
+	sum(promo_snss) as promo_snss,
+	max(src_nm) as src_nm,
+	max(kortex_dprct_ts) as kortex_dprct_ts,
+	max(kortex_upld_ts) as kortex_upld_ts
+	from 
+		(
+		select 
+			*,
+			case 
+	        when CHARINDEX('core', lower(cmpgn_nm))>0 then 'core'
+	        when CHARINDEX('growth', lower(cmpgn_nm))>0 then 'growth'
+	        when CHARINDEX('adjacent', lower(cmpgn_nm))>0 then 'adjacent'
+	        when CHARINDEX('adjacency', lower(cmpgn_nm))>0 then 'adjacent'
+	        when CHARINDEX('thankyou', lower(cmpgn_nm))>0 then 'adjacent'
+	        when CHARINDEX('fresh', lower(cmpgn_nm))>0 then 'growth'
+	        when CHARINDEX('contextual', lower(cmpgn_nm))>0 then 'core'
+	        when CHARINDEX('hqp', lower(cmpgn_nm))>0 then 'core'
+	        when CHARINDEX('competition', lower(cmpgn_nm))>0 then 'core'
+	        when CHARINDEX('brand exposed', lower(cmpgn_nm))>0 then 'core'
+	        when CHARINDEX('brand lapsers', lower(cmpgn_nm))>0 then 'core'
+	        when CHARINDEX('retargeting', lower(cmpgn_nm))>0 then 'core'
+	        when CHARINDEX('adjacencies', lower(cmpgn_nm))>0 then 'adjacent'
+	        when CHARINDEX('affinity', lower(cmpgn_nm))>0 then 'adjacent'
+	        when CHARINDEX('brand loyalists', lower(cmpgn_nm))>0 then 'adjacent'
+	        when CHARINDEX('fresh btf', lower(cmpgn_nm))>0 then 'growth'
+	        when CHARINDEX('fresh atf', lower(cmpgn_nm))>0 then 'growth'
+	        when CHARINDEX('freshbtf', lower(cmpgn_nm))>0 then 'growth'
+	        when CHARINDEX('freshatf', lower(cmpgn_nm))>0 then 'growth'
+	        when CHARINDEX('lapsers', lower(cmpgn_nm))>0 then 'core'
+	        else 'unclassified type'
+	        end as disp_type	
+	        from display_cmb
+			) as test
+	group by dt, catg, disp_type
+),
+display_final as 
+(
+select 
+		*,
+		case when click_thru != 0 and imprsn != 0
+			then (click_thru/imprsn)*100 else 0 end as ctr,
+		case when click_thru != 0 and total_cost != 0
+			then total_cost/click_thru else 0 end as cpc,
+		case when total_cost != 0 and promo_sales != 0
+			then (total_cost/promo_sales)*100 else 0 end as acos,
+		case when total_cost != 0 and promo_sales != 0
+			then (promo_sales/total_cost)*100 else 0 end as roas,
+		case when promo_pur != 0 and promo_dpv != 0
+			then (promo_pur / promo_dpv)*100 else 0 end as cnv,
+		case when promo_unit_sold !=0 and promo_sales != 0
+			then (promo_sales/promo_unit_sold)*100 else 0 end as asp
+        from display_type
+)
+select 
+	'INDIA' as src_id,
+	src_nm,
+	MD5('INDIA' || src_nm || 'Amazon Retail India Pvt. Ltd.' || dt || catg || disp_type) as hash_key,
+	'Amazon Retail India Pvt. Ltd.' as mktplace_nm,
+	cmpgn_nm as mktplace_cmpgn_nm,
+	disp_type as disp_clasfctn_type_cd,
+	brand_srch as brand_srch_cnt,
+	bud_imprsn as bud_alloc_imprsn_val,
+	dt as rpt_cal_dt,
+	bud as cmpgn_bud_val,
+	click_thru as click_thru_cnt,
+	imprsn as imprsn_cnt,
+	catg as mktplace_subbrand_desc,
+	prmo_atc as total_add_to_cart_cnt,
+	total_cost as total_cost_val,
+	promo_dpv as total_detl_page_view_cnt,
+	promo_ntb_prod_sales as total_new_to_brand_prod_sale_val,
+	promo_ntb_pur as total_new_to_brand_pur_val,
+	promo_ntb_unit_sold as total_new_to_brand_sale_qty,
+	promo_pur_click as total_pur_click_cnt,
+	promo_pur as total_pur_cnt,
+	promo_sales as total_sale_val,
+	promo_unit_sold as total_promo_sale_qty,
+	'INR' as curr_cd,
+	kortex_upld_ts,
+	kortex_dprct_ts,
+	current_timestamp as kortex_model_cre_ts,
+	row_number() over(partition by dt, catg, disp_type order by dt) as rn
+  	from display_final
+	) main_table 
+WHERE rn = 1 and NOT EXISTS (
+         SELECT hash_key
+         FROM mktg_exec.cmpgn_track_mgmt_adver_disp disp
+         WHERE 
+             disp.hash_key = main_table.hash_key            
+         )
+      );
+
+get diagnostics rows_affected := row_count;
+raise info 'mktg_exec.cmpgn_track_mgmt_adver_disp	|   Rows inserted into Target : %',rows_affected;
+END IF;
+
+
+-- DEFAULT Exception block
+EXCEPTION WHEN OTHERS THEN 
+    RAISE EXCEPTION 'An exception occured in mktg_exec.sp_adver_disp- %', sqlerrm;
+    ROLLBACK;
+
+--Commit to ensure sp gets committed when used inside other blocks.
+commit;
+end;
+$_$
