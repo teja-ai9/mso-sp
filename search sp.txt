@@ -1,0 +1,1331 @@
+CREATE OR REPLACE PROCEDURE mktg_exec.sp_adver_srch(src_id_input character varying(256), mktplace_nm_input character varying(256), mktplace_subchnl_nm_input character varying(500), mktplace_location character varying(100))
+ LANGUAGE plpgsql
+AS $_$
+
+
+
+/*
+
+============================================================================================================================================
+
+
+
+Authors          : Anandu Krishnan
+
+Create Date      : 10/20/2023
+
+Description      : This SP loads data for search campaigns across marketplaces using below tables
+
+						stage.amazon_user_ad_spend_actl_in_ads_srch
+
+						stage.amazon_user_ad_spend_actl_in_spnsr_prod
+
+						stage.amazon_user_ad_spend_actl_in_spnsr_brand
+
+						stage.amazon_user_ad_spend_actl_in_spnsr_disp
+
+						stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_srch
+
+						sales_prfmnc_eval.sales_rptg_mktplace_actl_sale
+
+					to mktg_exec.cmpgn_track_mgmt_adver_srch
+
+Name             : mktg_exec.sp_adver_srch
+
+Revisions        :
+
+Input Parameter  : None
+
+Output Parameter : None
+
+Version     Date        Author           Description
+
+---------  ----------  ---------------  ------------------------------------------------------------------
+
+
+
+1.0        10/20/2023  Anandu            Initial Version.
+
+2.0        11/30/2023  Anandu            Changes based on Design Review.
+
+3.0        12/10/2023  Anandu            Incorporated logic for search campaign splitting
+
+
+
+===================================================================================================================
+
+*/
+
+--declaration
+
+
+
+declare
+
+ rows_affected INT;
+
+ split_srcid ALIAS for $1;
+
+ split_mktplace ALIAS FOR $2;
+
+ split_mktplace_subchnl ALIAS FOR $3;
+
+ split_mktplace_location ALIAS for $4;
+
+ loop_var_mktplace int;
+
+ loop_var_mktplace_subchnl int;
+
+ loop_var_mktplace_location int;
+
+ loop_var_srcid int;
+
+
+
+begin
+
+	if mktplace_nm_input is null or mktplace_subchnl_nm_input is null or mktplace_location is null or src_id_input is null then 
+
+		RAISE EXCEPTION 'No input variable passed. Expecting marketplace name as input seperated by comma and the subchannels as input as second variable seperated by comma'; 
+
+	end if;
+
+
+
+	--Checking if the temporary table exists or not
+
+	drop table if exists srcid_list;
+
+    --Create temporary table with marketplace values
+
+	create temporary table srcid_list(
+
+	   srcid_val VARCHAR(500)
+
+	);
+
+	--Split based on commas and enter as different records to do a in statement on main query
+
+    FOR loop_var_srcid IN 1..(REGEXP_COUNT(split_srcid,',') + 1) LOOP
+
+            INSERT INTO srcid_list VALUES (CAST(TRIM(SPLIT_PART(split_srcid,',',loop_var_srcid)) AS VARCHAR));
+
+    END LOOP;
+
+	
+
+	--Checking if the temporary table exists or not
+
+	drop table if exists mktplace_list;
+
+    --Create temporary table with marketplace values
+
+	create temporary table mktplace_list(
+
+	   mktplace_nm_val VARCHAR(500)
+
+	);
+
+	--Split based on commas and enter as different records to do a in statement on main query
+
+    FOR loop_var_mktplace IN 1..(REGEXP_COUNT(split_mktplace,',') + 1) LOOP
+
+            INSERT INTO mktplace_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace,',',loop_var_mktplace)) AS VARCHAR));
+
+    END LOOP;
+
+   
+
+   --Checking if the temporary table exists or not
+
+	drop table if exists mktplace_location_list;
+
+    --Create temporary table with marketplace values
+
+	create temporary table mktplace_location_list(
+
+	   mktplace_location_val VARCHAR(500)
+
+	);
+
+    --Split based on commas and enter as different records to do a in statement on main query
+
+    FOR loop_var_mktplace_location IN 1..(REGEXP_COUNT(split_mktplace_location,',') + 1) LOOP
+
+            INSERT INTO mktplace_location_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace_location,',',loop_var_mktplace_location)) AS VARCHAR));
+
+    END LOOP;
+
+   
+
+   
+
+   --Checking if the temporary table exists or not
+
+	drop table if exists mktplace_subchnl_list;
+
+    --Create temporary table with marketplace values
+
+	create temporary table mktplace_subchnl_list(
+
+	   mktplace_subchnl_nm_val VARCHAR(500)
+
+	);
+
+    --Split based on commas and enter as different records to do a in statement on main query
+
+    FOR loop_var_mktplace_subchnl IN 1..(REGEXP_COUNT(split_mktplace_subchnl,',') + 1) LOOP
+
+            INSERT INTO mktplace_subchnl_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace_subchnl,',',loop_var_mktplace_subchnl)) AS VARCHAR));
+
+    END LOOP;
+
+
+
+IF(NOT EXISTS(SELECT 1 FROM stage.amazon_user_ad_spend_actl_in_ads_srch) OR NOT EXISTS(SELECT 1 FROM stage.amazon_user_ad_spend_actl_in_spnsr_prod)
+
+	or not exists(select 1 from stage.amazon_user_ad_spend_actl_in_spnsr_brand) or not exists(select 1 from stage.amazon_user_ad_spend_actl_in_spnsr_disp)
+
+	or not exists(select 1 from stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_srch) or not exists(SELECT 1 FROM sales_prfmnc_eval.sales_rptg_mktplace_actl_sale where mktplace_nm in (select distinct mktplace_nm_val from mktplace_list) and mktplace_subchnl_nm in (select distinct mktplace_subchnl_nm_val from mktplace_subchnl_list) and mktplace_loc_nm in (select distinct mktplace_location_val from mktplace_location_list))) THEN 
+
+RAISE exception 'One of the table required in process is empty';
+
+ELSIF NOT EXISTS(select 1 from matrl_mstr.matrl where src_id in (select distinct srcid_val from srcid_list) and pack_size_nm is not null) THEN
+
+    RAISE exception ' matrl_mstr.matrl is empty for required conditions';
+
+ELSE 
+
+INSERT INTO klg_nga_kamea.mktg_exec.cmpgn_track_mgmt_adver_srch (
+
+        src_id,
+
+		src_nm,
+
+		hash_key,
+
+		mktplace_nm,
+
+		rpt_cal_dt,
+
+		mktplace_cmpgn_prtflo_desc,
+
+		mktplace_cmpgn_bud_val,
+
+		click_cnt,
+
+		cmpgn_nm,
+
+		imprsn_cnt,
+
+		new_to_brand_order_cnt,
+
+		new_to_brand_sale_val,
+
+		order_cnt,
+
+		total_sale_val,
+
+		mktplace_cmpgn_spend_actl_val,
+
+		total_promo_sale_qty,
+
+		total_new_to_brand_sale_qty,
+
+		srch_clasfctn_type_cd,
+
+		srch_state_cd,
+
+		mktplace_adver_trgt_strat_cd,
+
+		mktplace_adver_type_cd,
+
+		curr_cd,
+
+		kortex_upld_ts,
+
+		kortex_dprct_ts,
+
+		kortex_model_cre_ts
+
+      ) (
+
+       select /*+ parallel(8)*/
+
+        src_id,
+
+		src_nm,
+
+		hash_key,
+
+		mktplace_nm,
+
+		rpt_cal_dt,
+
+		mktplace_cmpgn_prtflo_desc,
+
+		mktplace_cmpgn_bud_val,
+
+		click_cnt,
+
+		cmpgn_nm,
+
+		imprsn_cnt,
+
+		new_to_brand_order_cnt,
+
+		new_to_brand_sale_val,
+
+		order_cnt,
+
+		total_sale_val,
+
+		mktplace_cmpgn_spend_actl_val,
+
+		total_promo_sale_qty,
+
+		total_new_to_brand_sale_qty,
+
+		srch_clasfctn_type_cd,
+
+		srch_state_cd,
+
+		mktplace_adver_trgt_strat_cd,
+
+		mktplace_adver_type_cd,
+
+		curr_cd,
+
+		kortex_upld_ts,
+
+		kortex_dprct_ts,
+
+		kortex_model_cre_ts
+
+ FROM (    
+
+with search_old as 
+
+(
+
+select
+
+    "date"::date,
+
+    cmpgn_nm,
+
+    case
+
+        when upper(trim(replace("type",' ',''))) like '%SBV%' then 'SBV' 
+
+        when upper(trim(replace("type",' ',''))) like '%SB%' then 'SB'
+
+        when upper(trim(replace("type",' ',''))) like '%SP%' then 'SP'
+
+        when upper(trim(replace("type",' ',''))) like '%SD%' then 'SD'
+
+        else "type" end as "type",
+
+    max(prtflo) as prtflo,
+
+    sum(bud) as bud,
+
+    sum(imprsn) as imprsn,
+
+    sum(click) as click,
+
+    sum(spend_value) as spend,
+
+    sum("order") as "order",
+
+    sum(sales) as sales,
+
+    0 as total_units,
+
+    sum(ntb_order) as ntb_order,
+
+    sum(ntb_sales) as ntb_sales,
+
+    0 as ntb_units,
+
+    max(src_nm) as src_nm,
+
+    max(kortex_dprct_ts) as kortex_dprct_ts,
+
+    max(kortex_upld_ts) as kortex_upld_ts
+
+    from
+
+    ( 
+
+        select 
+
+        *,
+
+		case when CHARINDEX('/', dt) > 0 then
+
+    			to_date(dt, 'MM/DD/YYYY')::date end as "date"
+
+        from stage.amazon_user_ad_spend_actl_in_ads_srch
+
+    )
+
+    group by "date",cmpgn_nm, "type" 
+
+),
+
+search_sp as 
+
+(
+
+select
+
+    case when CHARINDEX('/', dt) > 0 then
+
+    to_date(dt, 'MM/DD/YYYY')::date end as "date",
+
+    cmpgn_nm,
+
+    'SP' as "type",
+
+    max(prtflo_nm) as prtflo,
+
+    0 as bud,
+
+    sum(imprsn :: integer)as imprsn,
+
+    sum(click :: integer) as click,
+
+    sum(coalesce(nullif(replace(replace(trim(spend),'?',''),',',''), ''), '0') :: FLOAT8) as spend,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_order"),'?',''),',',''), ''), '0') :: INTEGER) as "order",
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_sales"),'?',''),',',''), ''), '0') :: FLOAT) as sales,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_units"),'?',''),',',''), ''), '0') :: INTEGER) as total_units,
+
+    0 as ntb_order,
+
+    0 as ntb_sales,
+
+    0 as ntb_units,
+
+    max(src_nm) as src_nm,
+
+    max(kortex_dprct_ts) as kortex_dprct_ts,
+
+    max(kortex_upld_ts) as kortex_upld_ts
+
+    from stage.amazon_user_ad_spend_actl_in_spnsr_prod
+
+    group by "date",cmpgn_nm,"type"
+
+),
+
+search_sb as
+
+(
+
+select
+
+    case when CHARINDEX('/', dt) > 0 then
+
+    to_date(dt, 'MM/DD/YYYY')::date end as "date",
+
+    cmpgn_nm,
+
+    case
+
+        when replace(cmpgn_nm,' ','') like '%SBV%' then 'SBV' 
+
+        when replace(cmpgn_nm,' ','') like '%SB%' then 'SB'
+
+        else 'unclassified'
+
+    end as "type",
+
+    max(prtflo_nm) as prtflo,
+
+    0 as bud,
+
+    sum(imprsn :: integer )as imprsn,
+
+    sum(click :: integer) as click,
+
+    sum(coalesce(nullif(replace(replace(trim(spend_conv),'?',''),',',''), ''), '0') :: FLOAT) as spend,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_order"),'?',''),',',''), ''), '0') :: INTEGER) as "order",
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_sales_conv"),'?',''),',',''), ''), '0') :: FLOAT) as sales,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_unit"),'?',''),',',''), ''), '0') :: INTEGER) as total_units,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_ntb_order"),'?',''),',',''), ''), '0') :: INTEGER) as ntb_order,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_ntb_sales_conv"),'?',''),',',''), ''), '0') :: FLOAT) as ntb_sales,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_ntb_units"),'?',''),',',''), ''), '0') :: INTEGER) as ntb_units,
+
+    max(src_nm) as src_nm,
+
+    max(kortex_dprct_ts) as kortex_dprct_ts,
+
+    max(kortex_upld_ts) as kortex_upld_ts
+
+    from stage.amazon_user_ad_spend_actl_in_spnsr_brand
+
+    group by "date",cmpgn_nm, "type"
+
+),
+
+search_sd as 
+
+(
+
+select 
+
+    date_new as "date",
+
+    cmpgn_nm,
+
+    'SD' as "type",
+
+    max(prtflo_nm) as prtflo,
+
+    0 as bud,
+
+    sum(imprsn :: INTEGER)as imprsn,
+
+    sum(click :: INTEGER) as click,
+
+    sum(coalesce(nullif(replace(replace(trim(spend),'?',''),',',''), ''), '0') :: FLOAT) as spend,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_order_click"),'?',''),',',''), ''), '0') :: INTEGER) as "order",
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_sales_click"),'?',''),',',''), ''), '0') :: FLOAT) as sales,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_total_units_click"),'?',''),',',''), ''), '0') :: INTEGER) as total_units,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_ntb_order_click"),'?',''),',',''), ''), '0') :: INTEGER) as ntb_order,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_ntb_sales_click"),'?',''),',',''), ''), '0') :: FLOAT) as ntb_sales,
+
+    sum(coalesce(nullif(replace(replace(trim("day_14_ntb_units_click"),'?',''),',',''), ''), '0') :: INTEGER) as ntb_units,
+
+    max(src_nm) as src_nm,
+
+    max(kortex_dprct_ts) as kortex_dprct_ts,
+
+    max(kortex_upld_ts) as kortex_upld_ts
+
+    from (
+
+    select  
+
+        case when CHARINDEX('/', dt) > 0 then
+
+        to_date(dt, 'MM/DD/YYYY')::date end as date_new,
+
+        *
+
+        from stage.amazon_user_ad_spend_actl_in_spnsr_disp
+
+        )
+
+    group by "date",cmpgn_nm,"type"
+
+),
+
+srch_cmb as
+
+(
+
+select
+
+    srch_union.date,
+
+    srch_union.cmpgn_nm,
+
+    srch_union.type,
+
+    srch_union.prtflo,
+
+    round(srch_union.bud::FLOAT,2) as bud,
+
+    srch_union.imprsn,
+
+    srch_union.click,
+
+    round(srch_union.spend::FLOAT,2) as spend,
+
+    srch_union.order,
+
+    round(srch_union.sales::FLOAT,2) as sales,
+
+    srch_union.total_units,
+
+    srch_union.ntb_order,
+
+    round(srch_union.ntb_sales::FLOAT,2) as ntb_sales,
+
+    srch_union.ntb_units,
+
+    src_nm,
+
+    kortex_dprct_ts,
+
+    kortex_upld_ts
+
+from
+
+	(
+
+    select * from search_old where upper("type") = 'SP' and "date" < (select min("date") from search_sp)
+
+    	union 
+
+    select * from search_old where upper("type") in ('SB','SBV') and "date" < (select min("date") from search_sb)
+
+    	union 
+
+/*Fxixing old SD data based on the latest SD data using the ratios derived using sales distribution analysis 
+
+     Sales Ratio - 0.031
+
+     Order ratio - 0.030
+
+     ntb sales - 0.040
+
+     ntb orders - 0.038
+
+ All other columns from the table is pulled as it is  */
+
+    select 
+
+    	"date",
+
+    	cmpgn_nm,
+
+    	"type",
+
+    	prtflo,
+
+    	bud,
+
+    	imprsn,
+
+    	click,
+
+    	spend,
+
+    	"order"*0.030 as "order",
+
+    	sales*0.031 as sales,
+
+    	total_units,
+
+    	ntb_order*0.038 as ntb_order,
+
+    	ntb_sales*0.040 as ntb_sales,
+
+    	ntb_units,
+
+    	src_nm,
+
+    	kortex_dprct_ts,
+
+    	kortex_upld_ts
+
+    from search_old where upper("type") = 'SD' and "date" < (select min("date") from search_sd)
+
+        union 
+
+    select * from search_sp
+
+        union 
+
+    select * from search_sb
+
+        union 
+
+    select * from search_sd
+
+	)srch_union
+
+),
+
+cnt_records as
+
+(
+
+select 
+
+  row_number() over (order by true) as num
+
+from (select distinct catg_nm from stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_srch where catg_nm not like '%|%')
+
+),
+
+xplode_catg as
+
+(
+
+select
+
+  cmpgn_nm, 
+
+  catg_nm as catg, 
+
+  trim(split_part(catg_nm,'|',num::int)) as split_catg
+
+from
+
+  (select * from (select tab.*,row_number()over(partition by upper(replace(cmpgn_nm,' ',''))) as nm from stage.mktg_user_media_catg_ref_mstr_amazon_in_ads_srch as tab) where nm=1)
+
+cross join
+
+  cnt_records
+
+where split_part(catg_nm,'|',num::int) is not null
+
+  and split_part(catg_nm,'|',num::int) != ''
+
+),
+
+srch_mapping_primary as
+
+(
+
+select 
+
+    xplode_catg.catg as catg_map,
+
+    xplode_catg.split_catg as catg,
+
+    srch_selective.*
+
+from
+
+    (select * from srch_cmb where (imprsn+click+spend+"order"+sales+total_units+ntb_order+ntb_sales+ntb_units)>0) as srch_selective
+
+left join
+
+    xplode_catg
+
+on
+
+    upper(replace(srch_selective.cmpgn_nm,' ',''))=upper(replace(xplode_catg.cmpgn_nm,' ','')) 
+
+),
+
+srch_mapping_secondary as
+
+(
+
+select
+
+    case
+
+        when catg is not null 
+
+            then catg
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%KCF%'
+
+            then 'CORNFLAKES'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%MUESLI%'
+
+            then 'MUESLI'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%CHOCOS%'
+
+            then 'CHOCOS'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%CHOCOFILLS%'
+
+            then 'CHOCO FILLS'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%GRANOLA%'
+
+            then 'GRANOLA'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%OATS%'
+
+            then 'OATS'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%FROOTLOOPS%'
+
+            then 'FROOT LOOPS'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%PRINGLES%'
+
+            then 'PRINGLES'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%UPMA%'
+
+            then 'UPMA'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%SPECIALK%'
+
+            then 'SPECIAL K'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%WHEATFLAKES%'
+
+            then 'WHEATFLAKES'
+
+        when catg is null and upper(replace(split_part(cmpgn_nm,'|',1),' ','')) like '%BARS%'
+
+            then 'BARS'
+
+        else 'UNCATEGORIZED'
+
+    end as catg_cmplt,
+
+    row_number()over(partition by "date",cmpgn_nm order by catg_cmplt) as catg_cnt,
+
+    srch_mapping_primary.*
+
+from srch_mapping_primary   
+
+),
+
+offtake_sal as 
+
+(
+
+select dt,
+
+       catg,
+
+       sales_val/sum(sales_val) over(partition by dt) as catg_sales_perc
+
+       from (
+
+select offt.dt, 
+
+       prod_tab.altn_brand_nm as catg,
+
+       sum(sales_val) as sales_val
+
+  from 
+
+        (SELECT rpt_cal_dt as dt,
+
+               mktplace_prod_cd,
+
+               pack_size_cd,
+
+               sum(coalesce(sale_val,0)) as sales_val,    
+
+               sum(coalesce(sale_qty,0)) as sales_unit,
+
+               sum(coalesce(rtn_qty,0)) as rtn_qty,
+
+           max(mktplace_prod_desc) as mktplace_prod_desc
+
+          from klg_nga_kamea.sales_prfmnc_eval.sales_rptg_mktplace_actl_sale
+
+         where src_id in (select distinct srcid_val from srcid_list)
+
+               AND mktplace_nm in (select distinct mktplace_nm_val from mktplace_list) 
+
+               and mktplace_subchnl_nm in (select distinct mktplace_subchnl_nm_val from mktplace_subchnl_list)
+
+               and mktplace_loc_nm in (select distinct mktplace_location_val from mktplace_location_list)
+
+         group by mktplace_prod_cd,rpt_cal_dt,pack_size_cd ) offt
+
+   left join (select pack_size_nm,altn_brand_nm 
+
+               from matrl_mstr.matrl
+
+               where src_id in (select distinct srcid_val from srcid_list)
+
+              group by pack_size_nm,altn_brand_nm
+
+             ) prod_tab
+
+    on offt.pack_size_cd = prod_tab.pack_size_nm
+
+    group by offt.dt,prod_tab.altn_brand_nm)
+
+    where catg is not null
+
+),
+
+srch_attrb as
+
+(
+
+select
+
+    "date", 
+
+    "type",
+
+    catg_cmplt as catg,
+
+    cmpgn_nm,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then bud
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(bud*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),2)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(bud*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),2)
+
+    end as bud,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then imprsn
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(imprsn*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),0)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(imprsn*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),0)
+
+    end as imprsn,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then click
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(click*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),0)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(click*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),0)
+
+    end as click,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then spend
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(spend*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),2)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(spend*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),2)
+
+    end as spend,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then "order"
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round("order"*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),0)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round("order"*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),0)
+
+    end as "order",
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then sales
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(sales*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),2)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(sales*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),2)
+
+    end as sales,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then total_units
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(total_units*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),0)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(total_units*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),0)
+
+    end as total_units,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then ntb_order
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(ntb_order*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),0)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(ntb_order*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),0)
+
+    end as ntb_order,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then ntb_sales
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(ntb_sales*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),2)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(ntb_sales*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),2)
+
+    end as ntb_sales,
+
+    case 
+
+        when coalesce(catg_map,catg_cmplt) not like ('%|%')
+
+        then ntb_units
+
+        when catg_map like ('%|%') and sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float> 0
+
+        then round(ntb_units*catg_sales_perc*(1::float/sum(catg_sales_perc)over(partition by "date",cmpgn_nm)::float),0)
+
+        when catg_map like ('%|%') and (sum(catg_sales_perc)over(partition by "date",cmpgn_nm )::float<= 0 or sum(catg_sales_perc)over(partition by "date",cmpgn_nm)is null)
+
+        then round(ntb_units*(1::float/max(catg_cnt)over(partition by "date",cmpgn_nm)::float),0)
+
+    end as ntb_units,
+
+    src_nm,
+
+    kortex_dprct_ts,
+
+    kortex_upld_ts
+
+from
+
+    srch_mapping_secondary 
+
+left join
+
+    offtake_sal
+
+on offtake_sal.dt=srch_mapping_secondary."date" 
+
+    and upper(replace(offtake_sal.catg,' ',''))=upper(replace(srch_mapping_secondary.catg_cmplt,' ',''))
+
+),
+
+cmpgn_indicator as
+
+(
+
+select
+
+attr.*,
+
+case 
+
+    when upper(trim(cmp_ind.cmpgn_ind)) like '%BRAND%' then 'BRAND'
+
+    when upper(trim(cmp_ind.cmpgn_ind)) like '%MIXED%' or upper(trim(cmp_ind.cmpgn_ind)) like '%GENERIC%' then 'CATEGORY'
+
+    when upper(trim(cmp_ind.cmpgn_ind)) like '%AUTO%' then 'AUTO'
+
+    when upper(trim(cmp_ind.cmpgn_ind)) like '%COMP%' then 'COMPETITION'
+
+        else upper(cmp_ind.cmpgn_ind) end as cmpgn_ind
+
+from srch_attrb attr
+
+left join stage.mktg_user_media_cmpgn_ref_mstr_amazon_in_ads_srch cmp_ind 
+
+on upper(replace(trim(attr.cmpgn_nm),' ','')) = upper(replace(trim(cmp_ind.cmpgn_nm),' ',''))
+
+),
+
+sub_type_split as 
+
+(
+
+select 
+
+	"date" as dt,
+
+	catg,
+
+	"type" as sd_type,
+
+	max(cmpgn_nm) as cmpgn_nm,
+
+	sum(bud)::float as bud,
+
+	sum(imprsn) as imprsn,
+
+	sum(click) as click,
+
+	sum(spend) as spend,
+
+	sum("order") as ordr,
+
+	sum(sales) as sales,
+
+	sum(total_units) as total_units,
+
+	sum(ntb_order) as ntb_order,
+
+	sum(ntb_sales) as ntb_sales,
+
+	sum(ntb_units) as ntb_units,
+
+	max(src_nm) as src_nm,
+
+	max(kortex_upld_ts) as kortex_upld_ts,
+
+	max(kortex_dprct_ts) as kortex_dprct_ts,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%BRAND%' then spend end),0) as brand_spend,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%CATEGORY%' then spend end),0) as category_spend,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%COMPETITION%' then spend end),0) as competition_spend,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%AUTO%' then spend end),0) as auto_spend,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%BRAND%' then click end),0) as brand_click,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%CATEGORY%' then click end),0) as category_click,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%COMPETITION%' then click end),0) as competition_click,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%AUTO%' then click end),0) as auto_click,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%BRAND%' then sales end),0) as brand_sales,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%CATEGORY%' then sales end),0) as category_sales,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%COMPETITION%' then sales end),0) as competition_sales,
+
+	coalesce(sum(case when upper(trim(cmpgn_ind)) like '%AUTO%' then sales end),0) as auto_sales
+
+from cmpgn_indicator
+
+	group by "date",
+
+	catg,
+
+	"type"
+
+),
+
+sub_type_perc as
+
+(
+
+select 
+
+	'INDIA'::varchar as src_id,
+
+	src_nm,
+
+	'Amazon Retail India Pvt. Ltd.'::varchar as mktplace_nm,
+
+	dt as rpt_cal_dt,
+
+	catg as mktplace_cmpgn_prtflo_desc,
+
+	sd_type as srch_clasfctn_type_cd,
+
+	cmpgn_nm as cmpgn_nm,
+
+	bud::float8 as mktplace_cmpgn_bud_val,
+
+	imprsn as imprsn_cnt,
+
+	click as click_cnt,
+
+	spend as mktplace_cmpgn_spend_actl_val,
+
+	ordr as order_cnt,
+
+	sales as total_sale_val,
+
+	total_units as total_promo_sale_qty,
+
+	ntb_order as new_to_brand_order_cnt,
+
+	ntb_sales as new_to_brand_sale_val,
+
+	ntb_units as total_new_to_brand_sale_qty,
+
+	kortex_upld_ts,
+
+	kortex_dprct_ts,
+
+	current_timestamp as kortex_model_cre_ts,
+
+	((case when spend = 0 then 0 else brand_spend::float/spend::float end)::float4)::varchar || ' | '::varchar ||
+
+		   ((case when spend = 0 then 0 else category_spend::float/spend::float end)::float4)::varchar || ' | '::varchar ||
+
+	       ((case when spend = 0 then 0 else competition_spend::float/spend::float end)::float4)::varchar || ' | ' ::varchar ||
+
+	       ((case when spend = 0 then 0 else auto_spend::float/spend::float end)::float4)::varchar
+
+	as srch_state_cd,
+
+	 ((case when click = 0 then 0 else brand_click::float/click::float end)::float4)::varchar || ' | '::varchar ||
+
+		   ((case when click = 0 then 0 else category_click::float/click::float end)::float4)::varchar || ' | '::varchar ||
+
+	       ((case when click = 0 then 0 else competition_click::float/click::float end)::float4)::varchar || ' | ' ::varchar ||
+
+	       ((case when click = 0 then 0 else auto_click::float/click::float end)::float4)::varchar
+
+	as mktplace_adver_trgt_strat_cd,
+
+	  ((case when sales = 0 then 0 else brand_sales::float/sales::float end)::float4)::varchar || ' | '::varchar ||
+
+		   ((case when sales = 0 then 0 else category_sales::float/sales::float end)::float4)::varchar || ' | '::varchar ||
+
+	       ((case when sales = 0 then 0 else competition_sales::float/sales::float end)::float4)::varchar || ' | ' ::varchar ||
+
+	       ((case when sales = 0 then 0 else auto_sales::float/sales::float end)::float4)::varchar
+
+	as mktplace_adver_type_cd
+
+from sub_type_split
+
+)
+
+select 
+
+	src_id,
+
+	src_nm,
+
+	MD5(src_id || src_nm || mktplace_nm|| rpt_cal_dt || mktplace_cmpgn_prtflo_desc || srch_clasfctn_type_cd) as hash_key,
+
+	mktplace_nm,
+
+	rpt_cal_dt,
+
+	mktplace_cmpgn_prtflo_desc,
+
+	srch_clasfctn_type_cd,
+
+	cmpgn_nm,
+
+	mktplace_cmpgn_bud_val,
+
+	imprsn_cnt,
+
+	click_cnt,
+
+	mktplace_cmpgn_spend_actl_val,
+
+	order_cnt,
+
+	total_sale_val,
+
+	total_promo_sale_qty,
+
+	new_to_brand_order_cnt,
+
+	new_to_brand_sale_val,
+
+	total_new_to_brand_sale_qty,
+
+	srch_state_cd,
+
+	mktplace_adver_trgt_strat_cd,
+
+	mktplace_adver_type_cd,
+
+	'INR' as curr_cd,
+
+	kortex_upld_ts,
+
+	kortex_dprct_ts,
+
+	kortex_model_cre_ts,
+
+	row_number() OVER (PARTITION BY rpt_cal_dt,mktplace_cmpgn_prtflo_desc,srch_clasfctn_type_cd ORDER BY rpt_cal_dt) AS rn
+
+from sub_type_perc) main_table 
+
+WHERE rn = 1 and NOT EXISTS (
+
+         SELECT hash_key
+
+         FROM mktg_exec.cmpgn_track_mgmt_adver_srch srch
+
+         WHERE 
+
+             srch.hash_key = main_table.hash_key            
+
+         )
+
+      );
+
+
+
+get diagnostics rows_affected := row_count;
+
+raise info 'mktg_exec.cmpgn_track_mgmt_adver_srch	|   Rows inserted into Target : %',rows_affected;
+
+END IF;
+
+
+
+
+
+-- DEFAULT Exception block
+
+EXCEPTION WHEN OTHERS THEN 
+
+    RAISE EXCEPTION 'An exception occured in mktg_exec.sp_adver_srch- %', sqlerrm;
+
+    ROLLBACK;
+
+
+
+--Commit to ensure sp gets committed when used inside other blocks.
+
+commit;
+
+end;
+
+$_$

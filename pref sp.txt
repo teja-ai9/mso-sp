@@ -1,0 +1,259 @@
+CREATE OR REPLACE PROCEDURE mktg_exec.sp_cust_adver_pref()
+ LANGUAGE plpgsql
+AS $$
+
+
+
+/*
+
+============================================================================================================================================
+
+
+
+Authors          : Anandu Krishnan
+
+Create Date      : 10/20/2023
+
+Description      : This SP loads data for advertisement preference by customer
+
+                     from stage.amazon_user_shopr_pref_in_srch_ads_pref
+
+                   to mktg_exec.ecomm_cnsmr_engmt_cust_adver_pref
+
+Name             : mktg_exec.sp_cust_adver_pref
+
+Revisions        :
+
+Input Parameter  : None
+
+Output Parameter : None
+
+Version     Date        Author           Description
+
+---------  ----------  ---------------  ------------------------------------------------------------------
+
+
+
+1.0        10/20/2023  Anandu            Initial Version.
+
+2.0        12/04/2023  Anandu            Changes based on Design Review.
+
+
+
+===================================================================================================================
+
+*/
+
+--declaration
+
+
+
+declare
+
+rows_affected INT;
+
+
+
+begin
+
+
+
+IF(NOT EXISTS(SELECT 1 FROM klg_nga_kamea.stage.amazon_user_shopr_pref_in_srch_ads_pref)) THEN 
+
+   RAISE exception 'stage table amazon_user_shopr_pref_in_srch_ads_pref is empty';
+
+ELSE 
+
+     INSERT INTO klg_nga_kamea.mktg_exec.ecomm_cnsmr_engmt_cust_adver_pref(
+
+      src_id,
+
+      src_nm,
+
+      hash_key,
+
+      mktplace_nm,
+
+      srch_cal_dt,
+
+      keywrd_type_cd,
+
+      share_of_voice_cd,
+
+      share_of_voice_page_desc,
+
+      cost_per_click_val,
+
+      conv_rt,
+
+      click_thru_rt,
+
+      adver_share_of_voice_pct,
+
+      adver_cost_of_sales_pct,
+
+      mktplace_keywrd_catg_ind,
+
+      mktplace_catg_nm,
+
+      mktplace_subcatg_desc,
+
+      orgnc_covrg_pct,
+
+      curr_cd,
+
+      kortex_upld_ts,
+
+      kortex_dprct_ts,
+
+      kortex_model_cre_ts
+
+      ) (
+
+      SELECT /*+ parallel(8)*/
+
+      src_id,
+
+      src_nm,
+
+      hash_key,
+
+      mktplace_nm,
+
+      srch_cal_dt,
+
+      keywrd_type_cd,
+
+      share_of_voice_cd,
+
+      share_of_voice_page_desc,
+
+      cost_per_click_val,
+
+      conv_rt,
+
+      click_thru_rt,
+
+      adver_share_of_voice_pct,
+
+      adver_cost_of_sales_pct,
+
+      mktplace_keywrd_catg_ind,
+
+      mktplace_catg_nm,
+
+      mktplace_subcatg_desc,
+
+      orgnc_covrg_pct,
+
+      curr_cd,
+
+      kortex_upld_ts,
+
+      kortex_dprct_ts,
+
+      kortex_model_cre_ts FROM (
+
+      SELECT 'INDIA' AS src_id,
+
+         src_nm,
+
+         MD5(src_nm || 'INDIA' || 'Amazon Retail India Pvt. Ltd.' || concat(yr || '-' || mth || '-', day)  || selct_catg || selct_subcatg || keywrd_type) AS hash_key,
+
+         'Amazon Retail India Pvt. Ltd.' as mktplace_nm,
+
+         concat(yr || '-' || mth || '-', day)::date as srch_cal_dt,
+
+         keywrd_type as keywrd_type_cd,
+
+         sov_type as share_of_voice_cd,
+
+         sov_across as share_of_voice_page_desc,
+
+		 app_mgmt.fn_cstm_clean_numeric(cpc::varchar) as cost_per_click_val,
+
+		 app_mgmt.fn_cstm_clean_numeric(conv::varchar) as conv_rt,
+
+		 app_mgmt.fn_cstm_clean_numeric(ctr::varchar) as click_thru_rt,
+
+		 app_mgmt.fn_cstm_clean_numeric(advsov::varchar) as adver_share_of_voice_pct,
+
+		 app_mgmt.fn_cstm_clean_numeric(acos::varchar) as adver_cost_of_sales_pct,
+
+         dataset as mktplace_keywrd_catg_ind,
+
+         selct_catg as mktplace_catg_nm,
+
+         selct_subcatg as mktplace_subcatg_desc,
+
+		 app_mgmt.fn_cstm_clean_numeric(orgnc_covrg::varchar) as orgnc_covrg_pct,
+
+         'INR' as curr_cd,
+
+         kortex_upld_ts,
+
+         kortex_dprct_ts,
+
+         current_timestamp AS kortex_model_cre_ts,
+
+         row_number() OVER ( PARTITION BY mktplace_nm,keywrd_type_cd,srch_cal_dt,mktplace_subcatg_desc,mktplace_keywrd_catg_ind,keywrd_type,sov_type,sov_across ORDER BY srch_cal_dt) AS rn
+
+      FROM klg_nga_kamea.stage.amazon_user_shopr_pref_in_srch_ads_pref
+
+      ) main_table WHERE rn = 1
+
+      AND NOT EXISTS (
+
+         SELECT src_id,mktplace_nm,srch_cal_dt,mktplace_subcatg_desc,mktplace_keywrd_catg_ind
+
+         FROM klg_nga_kamea.mktg_exec.ecomm_cnsmr_engmt_cust_adver_pref prod_price
+
+         WHERE 
+
+             prod_price.src_id = main_table.src_id
+
+            AND prod_price.mktplace_nm = main_table.mktplace_nm
+
+            AND prod_price.srch_cal_dt = main_table.srch_cal_dt
+
+            AND prod_price.mktplace_subcatg_desc = main_table.mktplace_subcatg_desc 
+
+            AND prod_price.mktplace_keywrd_catg_ind = main_table.mktplace_keywrd_catg_ind
+
+            AND prod_price.keywrd_type_cd = main_table.keywrd_type_cd
+
+            AND prod_price.share_of_voice_cd = main_table.share_of_voice_cd
+
+            AND prod_price.share_of_voice_page_desc = main_table.share_of_voice_page_desc
+
+         )
+
+      );
+
+get diagnostics rows_affected := row_count;
+
+raise info 'mktg_exec.ecomm_cnsmr_engmt_cust_adver_pref |   Rows inserted into Target : %',rows_affected;
+
+END IF;
+
+
+
+
+
+-- DEFAULT Exception block
+
+EXCEPTION WHEN OTHERS THEN 
+
+    RAISE EXCEPTION 'An exception occured in mktg_exec.sp_cust_adver_pref - %', sqlerrm;
+
+    ROLLBACK;
+
+
+
+--Commit to ensure sp gets committed when used inside other blocks.
+
+commit;
+
+end;
+
+$$
