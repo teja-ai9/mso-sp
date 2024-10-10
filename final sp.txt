@@ -1,0 +1,799 @@
+CREATE OR REPLACE PROCEDURE mktg_strat_plan.sp_dm_mktg_bud_plan_mktplace_actl(src_id_input character varying(256), mktplace_nm_input character varying(256), mktplace_subchnl_nm_input character varying(500), mktplace_location character varying(100))
+ LANGUAGE plpgsql
+AS $_$
+
+
+
+/*
+
+============================================================================================================================================
+
+
+
+
+
+
+
+Authors          : Anandu Krishnan
+
+Create Date      : 10/20/2023
+
+Description      : This SP create the datamart required for Marketing spend optimizer using below listed tables
+
+                        mktg_exec.ecomm_cnsmr_engmt_glance_detl
+
+                        sales_prfmnc_eval.sales_rptg_mktplace_actl_sale
+
+                        mktg_exec.cmpgn_track_mgmt_adver_disp
+
+                        mktg_exec.cmpgn_track_mgmt_adver_srch
+
+                        mktg_exec.cmpgn_track_mgmt_mktplace_adver_plan_actl
+
+                     and insert the data into mktg_strat_plan.dm_mktg_bud_plan_mktplace_actl
+
+
+
+Name             : mktg_strat_plan.sp_dm_mktg_bud_plan_mktplace_actl
+
+Revisions        :
+
+Input Parameter  : Source ID comma seperated value (src_id_input) e.g: 'val1,val2,val3'
+
+                   Marketplace Name comma seperated value (mktplace_nm_input) e.g: 'val1,val2,val3'
+
+                   Marketplace SubChannel Name comma seperated value (mktplace_subchnl_nm_input) e.g: 'val1,val2,val3'
+
+                   Marketplace Location Region comma seperated value (mktplace_location) e.g: 'val1,val2,val3'
+
+Output Parameter : None
+
+Version     Date        Author           Description
+
+---------  ----------  ---------------  ------------------------------------------------------------------
+
+
+
+1.0        10/20/2023  Anandu            Initial Version.
+
+2.0        01/28/2024  Anandu            Added Input parameters and queries changed accordingly
+
+
+
+===================================================================================================================
+
+*/
+
+--declaration
+
+
+
+declare
+
+ rows_affected INT;
+
+ split_srcid ALIAS for $1;
+
+ split_mktplace ALIAS FOR $2;
+
+ split_mktplace_subchnl ALIAS FOR $3;
+
+ split_mktplace_location ALIAS for $4;
+
+ loop_var_mktplace int;
+
+ loop_var_mktplace_subchnl int;
+
+ loop_var_mktplace_location int;
+
+ loop_var_srcid int;
+
+
+
+begin
+
+	if mktplace_nm_input is null or mktplace_subchnl_nm_input is null or mktplace_location is null or src_id_input is null then 
+
+		RAISE EXCEPTION 'No input variable passed. Expecting marketplace name as input seperated by comma and the subchannels as input as second variable seperated by comma'; 
+
+	end if;
+
+
+
+	--Checking if the temporary table exists or not
+
+	drop table if exists srcid_list;
+
+    --Create temporary table with marketplace values
+
+	create temporary table srcid_list(
+
+	   srcid_val VARCHAR(500)
+
+	);
+
+	--Split based on commas and enter as different records to do a in statement on main query
+
+    FOR loop_var_srcid IN 1..(REGEXP_COUNT(split_srcid,',') + 1) LOOP
+
+            INSERT INTO srcid_list VALUES (CAST(TRIM(SPLIT_PART(split_srcid,',',loop_var_srcid)) AS VARCHAR));
+
+    END LOOP;
+
+	
+
+	--Checking if the temporary table exists or not
+
+	drop table if exists mktplace_list;
+
+    --Create temporary table with marketplace values
+
+	create temporary table mktplace_list(
+
+	   mktplace_nm_val VARCHAR(500)
+
+	);
+
+	--Split based on commas and enter as different records to do a in statement on main query
+
+    FOR loop_var_mktplace IN 1..(REGEXP_COUNT(split_mktplace,',') + 1) LOOP
+
+            INSERT INTO mktplace_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace,',',loop_var_mktplace)) AS VARCHAR));
+
+    END LOOP;
+
+   
+
+   --Checking if the temporary table exists or not
+
+	drop table if exists mktplace_location_list;
+
+    --Create temporary table with marketplace values
+
+	create temporary table mktplace_location_list(
+
+	   mktplace_location_val VARCHAR(500)
+
+	);
+
+    --Split based on commas and enter as different records to do a in statement on main query
+
+    FOR loop_var_mktplace_location IN 1..(REGEXP_COUNT(split_mktplace_location,',') + 1) LOOP
+
+            INSERT INTO mktplace_location_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace_location,',',loop_var_mktplace_location)) AS VARCHAR));
+
+    END LOOP;
+
+   
+
+   
+
+   --Checking if the temporary table exists or not
+
+	drop table if exists mktplace_subchnl_list;
+
+    --Create temporary table with marketplace values
+
+	create temporary table mktplace_subchnl_list(
+
+	   mktplace_subchnl_nm_val VARCHAR(500)
+
+	);
+
+    --Split based on commas and enter as different records to do a in statement on main query
+
+    FOR loop_var_mktplace_subchnl IN 1..(REGEXP_COUNT(split_mktplace_subchnl,',') + 1) LOOP
+
+            INSERT INTO mktplace_subchnl_list VALUES (CAST(TRIM(SPLIT_PART(split_mktplace_subchnl,',',loop_var_mktplace_subchnl)) AS VARCHAR));
+
+    END LOOP;
+
+
+
+IF (NOT EXISTS(SELECT 1 FROM mktg_exec.ecomm_cnsmr_engmt_glnc_detl where src_id in (select distinct srcid_val from srcid_list) and mktplace_nm in (select distinct mktplace_nm_val from mktplace_list) and mfg_brand_nm like 'Kellog%') OR NOT EXISTS(SELECT 1 FROM sales_prfmnc_eval.sales_rptg_mktplace_actl_sale where mktplace_nm in (select distinct mktplace_nm_val from mktplace_list) and mktplace_subchnl_nm in (select distinct mktplace_subchnl_nm_val from mktplace_subchnl_list) and mktplace_loc_nm in (select distinct mktplace_location_val from mktplace_location_list)) OR NOT EXISTS(SELECT 1 FROM mktg_exec.cmpgn_track_mgmt_adver_disp where src_id in (select distinct srcid_val from srcid_list)) OR NOT EXISTS(SELECT 1 FROM mktg_exec.cmpgn_track_mgmt_adver_srch where src_id in (select distinct srcid_val from srcid_list)) OR NOT EXISTS(SELECT 1 FROM mktg_exec.cmpgn_track_mgmt_mktplace_adver_plan_actl where plan_actl_ind = 'PLAN' and src_id in (select distinct srcid_val from srcid_list) and mktplace_nm in (select distinct mktplace_nm_val from mktplace_list))) THEN 
+
+   RAISE exception 'One of the model table is empty';
+
+ELSIF NOT EXISTS(select 1 from matrl_mstr.matrl where src_id in (select distinct srcid_val from srcid_list) and upper(altn_brand_nm) not in ('PRINGLES','UPMA','BARS') and pack_size_nm not like 'P%' and pack_size_nm not like 'U%' and pack_size_nm is not null) THEN
+
+    RAISE exception ' matrl_mstr.matrl is empty for required conditions';
+
+ELSE 
+
+   ---Truncating records. using delete statements as truncate option is only enabled for object owner.
+
+DELETE FROM klg_nga_kamea.mktg_strat_plan.dm_mktg_bud_plan_mktplace_actl;
+
+get diagnostics rows_affected := row_count;
+
+raise info 'mktg_strat_plan.dm_mktg_bud_plan_mktplace_actl truncated  |   Rows affected : %',rows_affected;
+
+
+
+     INSERT INTO klg_nga_kamea.mktg_strat_plan.dm_mktg_bud_plan_mktplace_actl (
+
+      	src_id,
+
+		src_nm,
+
+		hash_key,
+
+		mktplace_nm,
+
+		rpt_cal_dt,
+
+		brand_nm,
+
+		sale_val,
+
+		sale_qty,
+
+		rtn_qty,
+
+		glnc_view_cnt,
+
+		daily_glnc_view_cnt,
+
+		mktplace_cmpgn_type_bud_pct,
+
+		click_cnt,
+
+		total_promo_sale_qty,
+
+		total_new_to_brand_sale_qty,
+
+		adver_type_ind,
+
+		adver_subtype_ind,
+
+		total_cost_val,
+
+		adver_event_ind,
+
+		total_pur_cnt,
+
+		total_promo_detl_page_view_cnt,
+
+		viewblty_imprsn_cnt,
+
+		total_sale_val,
+
+		mktplace_cmpgn_bud_val,
+
+		daily_mktplace_cmpgn_bud_val,
+
+		daily_cmpgn_bud_val,
+
+		ecomm_adver_spend_gsv_rto,
+
+		rtn_on_adver_spend_val,
+
+		order_imprsn_rto,
+
+		curr_cd,
+
+		kortex_upld_ts,
+
+		kortex_dprct_ts,
+
+		kortex_model_cre_ts
+
+      ) (
+
+		 with offtake_sal_ads as (
+
+		select offt.*, 
+
+		       upper(prod_tab.altn_brand_nm) as catg,
+
+		       round(gv.glnc_view_cnt) as glance_view_cnt
+
+		  from 
+
+		            (SELECT 
+
+		               rpt_cal_dt as dt,
+
+		               mktplace_prod_cd as sku_cd,
+
+		               max(pack_size_cd) as prod_pack_size_cd,
+
+		               sum(coalesce(sale_val,0)) as sales_val,    
+
+		               sum(coalesce(sale_qty,0)) as sales_unit,
+
+		               sum(coalesce(rtn_qty,0)) as cust_rtn,
+
+		               max(mktplace_prod_desc) as prod_title
+
+		          from sales_prfmnc_eval.sales_rptg_mktplace_actl_sale
+
+		         where src_id in (select distinct srcid_val from srcid_list)
+
+               AND mktplace_nm in (select distinct mktplace_nm_val from mktplace_list) 
+
+               and mktplace_subchnl_nm in (select distinct mktplace_subchnl_nm_val from mktplace_subchnl_list)
+
+               and mktplace_loc_nm in (select distinct mktplace_location_val from mktplace_location_list)
+
+		         group by mktplace_prod_cd,rpt_cal_dt) offt
+
+		  inner join (select pack_size_nm,altn_brand_nm 
+
+		               from matrl_mstr.matrl
+
+		               where src_id in (select distinct srcid_val from srcid_list) and
+
+		               upper(altn_brand_nm) not in ('PRINGLES','UPMA','BARS') and pack_size_nm not like 'P%' and pack_size_nm not like 'U%'
+
+              			group by pack_size_nm,altn_brand_nm
+
+		             ) prod_tab
+
+		        on offt.prod_pack_size_cd = prod_tab.pack_size_nm
+
+		  left join (select * from klg_nga_kamea.mktg_exec.ecomm_cnsmr_engmt_glnc_detl where src_id in (select distinct srcid_val from srcid_list)
+
+  					and mktplace_nm in (select distinct mktplace_nm_val from mktplace_list) and mfg_brand_nm like 'Kellog%') gv 
+
+		        on offt.dt = gv.rpt_cal_dt 
+
+		        and offt.sku_cd = gv.mktplace_prod_cd
+
+		  where sales_unit > 0
+
+		),
+
+		disp_offtake as
+
+		(
+
+		    select 
+
+		    	disp.src_id,
+
+		    	disp.src_nm,
+
+		    	disp.mktplace_nm,
+
+		        disp.rpt_cal_dt,
+
+		        disp.mktplace_subbrand_desc as catg,
+
+		        disp.disp_clasfctn_type_cd as s_d_type,
+
+		        'display' as mark_type,
+
+		        disp.total_cost_val as mkt_spend,
+
+		        disp.imprsn_cnt as total_imprsn,
+
+		        disp.click_thru_cnt as total_click,
+
+		        disp.total_detl_page_view_cnt as total_dpv,
+
+		        disp.total_promo_sale_qty as total_unit_sold,
+
+		        disp.total_pur_cnt as total_order,
+
+		        disp.total_sale_val as mkt_sales,
+
+		        disp.total_new_to_brand_prod_sale_val as ntb_sales,
+
+		        disp.total_new_to_brand_pur_val as ntb_order,
+
+		        disp.total_new_to_brand_sale_qty as ntb_units,
+
+		        offt.sales_val,
+
+		        offt.sales_unit,
+
+		        offt.glance_view_cnt,
+
+		        disp.kortex_upld_ts,
+
+		        disp.kortex_dprct_ts
+
+		         from mktg_exec.cmpgn_track_mgmt_adver_disp disp
+
+		        left join 
+
+		        (
+
+		        select 
+
+		        dt,
+
+		        catg,
+
+		        sum(sales_val) as sales_val,
+
+		        sum(sales_unit) as sales_unit,
+
+		        sum(cust_rtn) as cust_rtn,
+
+		        sum(glance_view_cnt) as glance_view_cnt
+
+		        from offtake_sal_ads
+
+		        group by dt, catg
+
+		        ) offt 
+
+		        on disp.rpt_cal_dt = offt.dt
+
+		        and upper(disp.mktplace_subbrand_desc) = upper(offt.catg)
+
+		        	where disp.src_id in (select distinct srcid_val from srcid_list)
+
+		),
+
+		srch_offtake as
+
+		(
+
+		    select 
+
+		    	src.src_id,
+
+		    	src.src_nm,
+
+		    	src.mktplace_nm,
+
+		        src.rpt_cal_dt,
+
+		        src.mktplace_cmpgn_prtflo_desc as catg,
+
+		        src.srch_clasfctn_type_cd as s_d_type,
+
+		        'search' as mark_type,
+
+		        src.mktplace_cmpgn_spend_actl_val as mkt_spend,
+
+		        src.imprsn_cnt as total_imprsn,
+
+		        src.click_cnt as total_click,
+
+		        0 as total_dpv,
+
+		        src.total_promo_sale_qty as total_unit_sold,
+
+		        src.order_cnt as total_order,
+
+		        src.total_sale_val as mkt_sales,
+
+		        src.new_to_brand_sale_val as ntb_sales,
+
+		        src.new_to_brand_order_cnt as ntb_order,
+
+		        src.total_new_to_brand_sale_qty as ntb_units,
+
+		        offt.sales_val,
+
+		        offt.sales_unit,
+
+		        offt.glance_view_cnt,
+
+		        src.kortex_upld_ts,
+
+		        src.kortex_dprct_ts
+
+		        from mktg_exec.cmpgn_track_mgmt_adver_srch src
+
+		        left join 
+
+		        (
+
+		        select 
+
+		        dt,
+
+		        catg,
+
+		        sum(sales_val) as sales_val,
+
+		        sum(sales_unit) as sales_unit,
+
+		        sum(cust_rtn) as cust_rtn,
+
+		        sum(glance_view_cnt) as glance_view_cnt
+
+		        from offtake_sal_ads
+
+		        group by dt, catg
+
+		        ) offt 
+
+		        on src.rpt_cal_dt = offt.dt
+
+		        and upper(src.mktplace_cmpgn_prtflo_desc) = upper(offt.catg)
+
+		        	where src.src_id in (select distinct srcid_val from srcid_list)
+
+		),
+
+		offtake_overall as
+
+		( 
+
+		select *,
+
+		case when mkt_sales != 0
+
+		     then mkt_sales/sum(mkt_sales) over(partition by rpt_cal_dt, catg) end as sales_perc
+
+		        from
+
+		        (
+
+		           (select * from disp_offtake)
+
+		             union all
+
+		           (select * from srch_offtake)
+
+		        )
+
+		),
+
+		budget_master as 
+
+		(
+
+		select 
+
+		cal_mth,
+
+		cal_yr,
+
+		upper(brand_new) as brand,
+
+		sum(nvl(mktplace_cmpgn_bud_val,0)) as budget
+
+		from (
+
+		    select 
+
+		    cal_mth,
+
+		    cal_yr,
+
+			case
+
+				 when upper(replace(trim(mktplace_brand_nm),' ','')) like '%KCF%' or upper(replace(trim(mktplace_brand_nm),' ','')) like '%CORN%'
+
+					then 'CORNFLAKES'
+
+				when upper(replace(trim(mktplace_brand_nm),' ','')) like '%MUESLI%'
+
+           	 		then 'MUESLI'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%CHOCOS%'
+
+            		then 'CHOCOS'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%CHOCOFILLS%' or upper(replace(trim(mktplace_brand_nm),' ','')) like '%FILLS%'
+
+            		then 'CHOCO FILLS'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%GRANOLA%'
+
+            		then 'GRANOLA'
+
+       			when upper(replace(trim(mktplace_brand_nm),' ','')) like '%OATS%'
+
+            		then 'OATS'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%FROOTLOOPS%'
+
+            		then 'FROOT LOOPS'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%PRINGLES%'
+
+            		then 'PRINGLES'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%UPMA%'
+
+            		then 'UPMA'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%SPECIALK%'
+
+            		then 'SPECIAL K'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%WHEATFLAKES%' or upper(replace(trim(mktplace_brand_nm),' ','')) like '%WHEAT%'
+
+            		then 'WHEATFLAKES'
+
+        		when upper(replace(trim(mktplace_brand_nm),' ','')) like '%BARS%'
+
+            		then 'BARS'
+
+        		else 'UNCATEGORIZED' end as brand_new,
+
+		    mktplace_cmpgn_bud_val
+
+		    from mktg_exec.cmpgn_track_mgmt_mktplace_adver_plan_actl where plan_actl_ind = 'PLAN'
+
+		            and src_id in (select distinct srcid_val from srcid_list) and mktplace_nm in (select distinct mktplace_nm_val from mktplace_list)
+
+		    )
+
+		group by 
+
+		cal_mth,
+
+		cal_yr,
+
+		brand_new
+
+		),
+
+		spliting_sales as 
+
+		(
+
+		select *,
+
+		case when mkt_sales is not null or mkt_sales != 0 then sales_perc*sales_val end as daily_sales,
+
+		case when mkt_sales is not null or mkt_sales != 0 then sales_perc*sales_unit end as daily_units,
+
+		case when mkt_sales = 0 or mkt_sales is null then 0 else
+
+		    nvl(budget,0)*(mkt_sales/sum(mkt_sales) over(partition by extract(month from rpt_cal_dt), extract(year from rpt_cal_dt), catg)) end as daily_budget
+
+		from 
+
+		  (
+
+		    select 
+
+		        offt.*,
+
+		        bud.budget
+
+		        from offtake_overall offt
+
+		        left join budget_master bud
+
+		        on upper(offt.catg) = upper(bud.brand)
+
+		        and extract(month from offt.rpt_cal_dt) = bud.cal_mth
+
+		        and extract(year from offt.rpt_cal_dt) = bud.cal_yr
+
+		  )
+
+		),
+
+		conversion_s_d as 
+
+		(
+
+		    select *,
+
+		    case WHEN mkt_spend != 0 then mkt_sales/mkt_spend else 0 end AS roas,
+
+		    case when mkt_sales != 0 then mkt_spend/mkt_sales else 0 end as "acos",
+
+		    case when lower(mark_type) = 'display' and total_dpv != 0 then (total_order::float/total_dpv::float)*100
+
+		    	 when lower(mark_type) = 'search' and total_click != 0 then (total_order::float/total_click::float)*100
+
+		         else 0 end as conv_rto
+
+		    from spliting_sales
+
+		)
+
+		select 
+
+		src_id,
+
+		src_nm,
+
+		MD5(src_id || src_nm || mktplace_nm || rpt_cal_dt || catg || s_d_type) as hash_key,
+
+		mktplace_nm,
+
+		rpt_cal_dt,
+
+		catg as brand_nm,
+
+		coalesce(sales_val,0) as sale_val,
+
+		coalesce(daily_units,0) as sale_qty,
+
+		0 as rtn_qty,
+
+		coalesce(glance_view_cnt,0) as glnc_view_cnt,
+
+		case when mkt_sales != 0 then round((mkt_sales/sum(mkt_sales) over(partition by rpt_cal_dt,catg))*nvl(glance_view_cnt,0)) else 0 end as daily_glnc_view_cnt,
+
+		0 as mktplace_cmpgn_type_bud_pct,
+
+		coalesce(total_click,0) as click_cnt,
+
+		coalesce(total_unit_sold,0) as total_promo_sale_qty,
+
+		coalesce(ntb_units,0) as total_new_to_brand_sale_qty,
+
+		mark_type as adver_type_ind,
+
+		s_d_type as adver_subtype_ind,
+
+		coalesce(mkt_spend,0) as total_cost_val,
+
+		case when mkt_spend != 0 then 1 else 0 end as adver_event_ind,
+
+		coalesce(total_order,0) as total_pur_cnt,
+
+		coalesce(total_dpv,0) as total_promo_detl_page_view_cnt,
+
+		coalesce(total_imprsn,0) as viewblty_imprsn_cnt,
+
+		coalesce(mkt_sales,0) as total_sale_val,
+
+		coalesce(budget,0) as mktplace_cmpgn_bud_val,
+
+		coalesce(daily_budget,0) as daily_mktplace_cmpgn_bud_val,
+
+		coalesce(daily_sales,0) as daily_cmpgn_bud_val,
+
+		coalesce("acos",0) as ecomm_adver_spend_gsv_rto,
+
+		coalesce(roas,0) as rtn_on_adver_spend_val,
+
+		coalesce(conv_rto,0) as order_imprsn_rto,
+
+		'INR' as curr_cd,
+
+		kortex_upld_ts,
+
+		kortex_dprct_ts,
+
+		current_timestamp as kortex_model_cre_ts
+
+		from conversion_s_d     
+
+);
+
+get diagnostics rows_affected := row_count;
+
+raise info 'mktg_strat_plan.dm_mktg_bud_plan_mktplace_actl  |   Rows inserted into Target : %',rows_affected;
+
+END IF;
+
+
+
+
+
+-- DEFAULT Exception block
+
+EXCEPTION WHEN OTHERS THEN 
+
+    RAISE EXCEPTION 'An exception occured in mktg_strat_plan.sp_mktg_bud_plan_mktplace_actl - %', sqlerrm;
+
+    ROLLBACK;
+
+
+
+--Drop temporary tables created
+
+drop table if exists mktplace_list;
+
+drop table if exists mktplace_subchnl_list;
+
+drop table if exists mktplace_location_list;
+
+drop table if exists srcid_list;
+
+
+
+--Commit to ensure sp gets committed when used inside other blocks.
+
+commit;
+
+end;
+
+$_$

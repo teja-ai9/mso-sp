@@ -1,0 +1,179 @@
+CREATE OR REPLACE PROCEDURE mktg_exec.sp_glnc_detl()
+ LANGUAGE plpgsql
+AS $$
+
+
+
+/*
+
+============================================================================================================================================
+
+
+
+
+
+
+
+Authors          : Anandu Krishnan
+
+Create Date      : 10/20/2023
+
+Description      : This SP loads data for glance views for market places from
+
+                        amazon_user_shopr_pref_in_glance_view
+
+                     to mktg_exec.ecomm_cnsmr_engmt_glnc_detl
+
+Name             : mktg_exec.sp_glance_detl
+
+Revisions        :
+
+Input Parameter  : None
+
+Output Parameter : None
+
+Version     Date        Author           Description
+
+---------  ----------  ---------------  ------------------------------------------------------------------
+
+
+
+1.0        10/20/2023  Anandu            Initial Version.
+
+2.0        12/04/2023  Anandu            Changes based on Design Review.
+
+
+
+===================================================================================================================
+
+*/
+
+--declaration
+
+
+
+declare
+
+rows_affected INT;
+
+
+
+begin
+
+
+
+IF(NOT EXISTS(SELECT 1 FROM klg_nga_kamea.stage.amazon_user_shopr_pref_in_glance_view)) THEN 
+
+   RAISE exception 'stage table amazon_user_shopr_pref_in_glance_view is empty';
+
+ELSE 
+
+      
+
+insert into klg_nga_kamea.mktg_exec.ecomm_cnsmr_engmt_glnc_detl (src_id,src_nm,hash_key,mfg_brand_nm,rpt_cal_dt,mktplace_nm,mktplace_prod_cd,mktplace_catg_nm,mktplace_subcatg_desc,glnc_view_cnt,kortex_upld_ts,kortex_model_cre_ts,kortex_dprct_ts)
+
+(
+
+select /*+ parallel(8) */ 
+
+src_id,src_nm,hash_key,mfg_brand_nm,rpt_cal_dt,mktplace_nm,mktplace_prod_cd,mktplace_catg_nm,mktplace_subcatg_desc,glnc_view_cnt,kortex_upld_ts,kortex_model_cre_ts,kortex_dprct_ts
+
+from
+
+   (
+
+      select
+
+         'INDIA' as src_id,
+
+         src_nm,
+
+         MD5(src_nm || 'INDIA' || 'Amazon Retail India Pvt. Ltd.'  || concat(snpsht_yr || '-' || EXTRACT(month FROM TO_DATE(mth_nm, 'Mon')) || '-', snpsht_day)::date || sku_cd) as hash_key
+
+         ,lbr_brand_nm as mfg_brand_nm
+
+         ,concat(snpsht_yr || '-' || EXTRACT(month FROM TO_DATE(mth_nm, 'Mon')) || '-', snpsht_day)::date as rpt_cal_dt,
+
+         'Amazon Retail India Pvt. Ltd.' as mktplace_nm
+
+         ,sku_cd as mktplace_prod_cd
+
+         ,upper(catg) as mktplace_catg_nm
+
+         ,upper(subcatg) as mktplace_subcatg_desc
+
+         ,app_mgmt.fn_cstm_clean_numeric(glance_view::varchar) as glnc_view_cnt
+
+         ,kortex_upld_ts
+
+         ,kortex_dprct_ts
+
+         ,current_timestamp as kortex_model_cre_ts
+
+         ,row_number() over(partition by snpsht_day, mth_nm, snpsht_yr, sku_cd order by snpsht_yr) as rn 
+
+         from klg_nga_kamea.stage.amazon_user_shopr_pref_in_glance_view
+
+   )
+
+   glance 
+
+where
+
+   rn = 1 
+
+   and not exists 
+
+   (
+
+      select
+
+         rpt_cal_dt, mktplace_prod_cd,src_id,mktplace_nm,mktplace_subcatg_desc
+
+         from klg_nga_kamea.mktg_exec.ecomm_cnsmr_engmt_glnc_detl gln_view
+
+      where
+
+         glance.rpt_cal_dt = gln_view.rpt_cal_dt 
+
+         and glance.mktplace_prod_cd = gln_view.mktplace_prod_cd 
+
+         and glance.src_id = gln_view.src_id
+
+         and glance.mktplace_nm = gln_view.mktplace_nm
+
+         and glance.mktplace_subcatg_desc = gln_view.mktplace_subcatg_desc
+
+   )
+
+);
+
+
+
+get diagnostics rows_affected := row_count;
+
+raise info 'Amazon Glance View Model   |   Rows inserted into Target : %', rows_affected;
+
+
+
+END IF;
+
+
+
+-- DEFAULT Exception block
+
+EXCEPTION WHEN OTHERS THEN 
+
+    RAISE EXCEPTION 'An exception occured in mktg_exec.sp_glance_detl - %', sqlerrm;
+
+    ROLLBACK;
+
+
+
+--Commit to ensure sp gets committed when used inside other blocks.
+
+commit;
+
+end;
+
+$$
